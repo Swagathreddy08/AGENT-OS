@@ -1,0 +1,26 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  background: #090d18;
+  color: #e8ecf5;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+.react-flow__node {
+  cursor: grab;
+}
+
+.react-flow__edge-path {
+  stroke: #7c5cff;
+  stroke-width: 2;
+}
