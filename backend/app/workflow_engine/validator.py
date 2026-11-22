@@ -33,16 +33,26 @@ def validate_graph(graph: WorkflowGraph) -> list[str]:
         if incoming[trigger.id]:
             errors.append(f"Trigger node {trigger.id} cannot have incoming edges.")
 
-    for node in graph.nodes:
-        if node.type not in TRIGGER_TYPES and incoming[node.id] == 0:
-            errors.append(f"Node {node.id} is unreachable.")
-
     adjacency = defaultdict(list)
     indegree = {node_id: 0 for node_id in ids}
     for edge in graph.edges:
         if edge.source in id_set and edge.target in id_set:
             adjacency[edge.source].append(edge.target)
             indegree[edge.target] += 1
+
+    if len(triggers) == 1:
+        reachable = {triggers[0].id}
+        pending = [triggers[0].id]
+        while pending:
+            node_id = pending.pop()
+            for target in adjacency.get(node_id, []):
+                if target not in reachable:
+                    reachable.add(target)
+                    pending.append(target)
+        for node in graph.nodes:
+            if node.id not in reachable:
+                errors.append(f"Node {node.id} is unreachable.")
+
     ready = [node_id for node_id, degree in indegree.items() if degree == 0]
     visited = 0
     while ready:

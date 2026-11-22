@@ -42,10 +42,20 @@ class WorkflowExecutor:
             state["nodes"] = {**state.get("nodes", {}), node_id: output}
 
             for edge in adjacency[node_id]:
-                if self._edge_matches(edge, output):
+                # Conditional edges are mutually exclusive. Count an unmatched
+                # edge as satisfied so merges on conditional branches can run.
+                matches = self._edge_matches(edge, output)
+                handle = getattr(edge, "sourceHandle", None)
+                if handle not in {"true", "false"} or matches:
                     indegree[edge.target] -= 1
-                    if indegree[edge.target] == 0:
-                        ready.append(edge.target)
+                elif sum(
+                    1
+                    for incoming_edge in self.graph.edges
+                    if incoming_edge.target == edge.target
+                ) > 1:
+                    indegree[edge.target] -= 1
+                if indegree[edge.target] == 0:
+                    ready.append(edge.target)
         return state
 
     @staticmethod

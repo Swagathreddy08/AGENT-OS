@@ -27,3 +27,16 @@ def test_rejects_cycle():
     errors = validate_graph(graph)
     assert any("cycle" in error for error in errors)
     assert any("incoming edges" in error for error in errors)
+
+
+def test_rejects_unreachable_node():
+    graph = WorkflowGraph(
+        nodes=[
+            WorkflowNode(id="trigger", type="manual_trigger"),
+            WorkflowNode(id="used", type="text_classifier"),
+            WorkflowNode(id="unreachable", type="text_classifier"),
+        ],
+        edges=[WorkflowEdge(id="edge", source="trigger", target="used")],
+    )
+    errors = validate_graph(graph)
+    assert any("unreachable" in error for error in errors)
