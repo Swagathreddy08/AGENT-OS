@@ -1,17 +1,24 @@
 from datetime import datetime, timedelta, timezone
 import bcrypt
+import hashlib
 from jose import JWTError, jwt
 
 from app.core.config import settings
 
 
 def hash_password(password: str) -> str:
-    password_bytes = password.encode("utf-8")[:72]
-    return bcrypt.hashpw(password_bytes, bcrypt.gensalt(rounds=12)).decode("ascii")
+    password_digest = hashlib.sha256(password.encode("utf-8")).digest()
+    password_hash = bcrypt.hashpw(password_digest, bcrypt.gensalt(rounds=12)).decode("ascii")
+    return f"sha256${password_hash}"
 
 
 def verify_password(password: str, password_hash: str) -> bool:
     try:
+        if password_hash.startswith("sha256$"):
+            password_digest = hashlib.sha256(password.encode("utf-8")).digest()
+            bcrypt_hash = password_hash.removeprefix("sha256$")
+            return bcrypt.checkpw(password_digest, bcrypt_hash.encode("ascii"))
+        # Verify bcrypt hashes created before the sha256 prefix was introduced.
         return bcrypt.checkpw(password.encode("utf-8")[:72], password_hash.encode("ascii"))
     except (ValueError, UnicodeEncodeError):
         return False
