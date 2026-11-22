@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   ReactFlow,
   Background,
@@ -30,22 +30,74 @@ interface ExecutionResponse {
   status: string;
 }
 
+interface ExecutionLog {
+  node_id: string;
+  status: string;
+  output?: Record<string, unknown>;
+  error?: string;
+  attempt?: number;
+}
+
+const nodeTypeLabels: Record<string, string> = {
+  "Manual Trigger": "manual_trigger",
+  "GitHub Issue Created": "github_issue_created",
+  "Webhook Trigger": "webhook_trigger",
+  "AI Agent": "ai_agent",
+  "LLM Completion": "llm_completion",
+  "Text Classifier": "text_classifier",
+  Summarizer: "summarizer",
+  "If / Else": "if_else",
+  Switch: "switch",
+  Merge: "merge",
+  Loop: "loop",
+  "GitHub API": "github_api",
+  "HTTP Request": "http_request",
+  "Database Query": "database_query",
+};
+
+function AgentNode({ data }: { data: Record<string, unknown> }) {
+  return (
+    <div className="min-w-[150px] rounded-md border border-slate-600 bg-slate-100 px-3 py-2 text-center text-sm font-medium text-slate-900 shadow-lg">
+      {String(data.label || "Node")}
+    </div>
+  );
+}
+
+const agentNodeTypes = { agentos: AgentNode };
+
 const initialNodes: Node[] = [
   {
     id: "trigger",
-    type: "input",
+    type: "agentos",
     position: { x: 80, y: 180 },
-    data: { label: "GitHub Issue Created", status: "ready" },
+    data: {
+      label: "GitHub Issue Created",
+      backendType: "github_issue_created",
+      description: "",
+      status: "ready",
+    },
   },
   {
     id: "classifier",
+    type: "agentos",
     position: { x: 320, y: 180 },
-    data: { label: "AI Issue Classifier", status: "ready" },
+    data: {
+      label: "AI Issue Classifier",
+      backendType: "text_classifier",
+      description: "",
+      status: "ready",
+    },
   },
   {
     id: "approval",
+    type: "agentos",
     position: { x: 560, y: 180 },
-    data: { label: "Human Approval", status: "waiting" },
+    data: {
+      label: "Human Approval",
+      backendType: "approval",
+      description: "",
+      status: "waiting",
+    },
   },
 ];
 
@@ -61,17 +113,6 @@ const nodeLibrary: NodeGroup[] = [
   { category: "Integrations", nodes: ["GitHub API", "HTTP Request", "Database Query"] },
 ];
 
-function getBackendNodeType(nodeId: string): string {
-  switch (nodeId) {
-    case "trigger":
-      return "github_issue_created";
-    case "classifier":
-      return "text_classifier";
-    default:
-      return "approval";
-  }
-}
-
 export default function WorkflowEditor({
   onSignOut,
 }: {
@@ -82,6 +123,45 @@ export default function WorkflowEditor({
   const [selectedNode, setSelectedNode] = useState<Node | null>(null);
   const [message, setMessage] = useState("");
   const [workflowId, setWorkflowId] = useState<string | null>(null);
+  const [executionId, setExecutionId] = useState<string | null>(null);
+  const [executionLogs, setExecutionLogs] = useState<ExecutionLog[]>([]);
+
+  useEffect(() => {
+    if (!executionId) {
+      return;
+    }
+
+    let stopped = false;
+    let timer: ReturnType<typeof setInterval> | undefined;
+
+    async function refreshExecution() {
+      try {
+        const [execution, logs] = await Promise.all([
+          api.get<ExecutionResponse>(`/executions/${executionId}`),
+          api.get<ExecutionLog[]>(`/executions/${executionId}/logs`),
+        ]);
+        if (stopped) return;
+
+        setExecutionLogs(logs.data);
+        setMessage(
+          `Execution ${execution.data.status} · ${execution.data.id.slice(0, 8)}`,
+        );
+
+        if (["completed", "failed", "cancelled"].includes(execution.data.status)) {
+          if (timer) clearInterval(timer);
+        }
+      } catch {
+        if (!stopped) setMessage("Unable to refresh execution status");
+      }
+    }
+
+    void refreshExecution();
+    timer = setInterval(() => void refreshExecution(), 1500);
+    return () => {
+      stopped = true;
+      if (timer) clearInterval(timer);
+    };
+  }, [executionId]);
 
   const handleConnect = useCallback(
     (connection: Connection) => {
@@ -128,12 +208,48 @@ export default function WorkflowEditor({
       const execution = await api.post<ExecutionResponse>(`/workflows/${id}/execute`, {
         input: {},
       });
+      setExecutionId(execution.data.id);
+      setExecutionLogs([]);
       setMessage(
         `Execution ${execution.data.status} · ${execution.data.id.slice(0, 8)}`,
       );
     } catch {
       setMessage("Execution could not be started");
     }
+  }
+
+  function addNode(nodeName: string) {
+    const id = `node-${crypto.randomUUID()}`;
+    const backendType = nodeTypeLabels[nodeName];
+    const newNode: Node = {
+      id,
+      type: "agentos",
+      position: {
+        x: 240 + (nodes.length % 4) * 180,
+        y: 160 + (nodes.length % 3) * 140,
+      },
+      data: {
+        label: nodeName,
+        backendType,
+        description: "",
+        status: "ready",
+      },
+    };
+    setNodes((currentNodes) => [...currentNodes, newNode]);
+    setSelectedNode(newNode);
+  }
+
+  function updateSelectedNode(field: "label" | "description", value: string) {
+    if (!selectedNode) return;
+
+    const updatedNode: Node = {
+      ...selectedNode,
+      data: { ...selectedNode.data, [field]: value },
+    };
+    setSelectedNode(updatedNode);
+    setNodes((currentNodes) =>
+      currentNodes.map((node) => (node.id === updatedNode.id ? updatedNode : node)),
+    );
   }
 
   return (

@@ -1,7 +1,7 @@
 import axios from "axios";
 
 const apiBaseUrl =
-  process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+  process.env.NEXT_PUBLIC_API_URL || "/api/v1";
 const accessTokenKey = "agentos_access_token";
 const refreshTokenKey = "agentos_refresh_token";
 
