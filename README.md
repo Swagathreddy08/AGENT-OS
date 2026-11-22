@@ -19,6 +19,11 @@ Set strong `JWT_SECRET`, `GITHUB_WEBHOOK_SECRET`, and `ENCRYPTION_KEY` values in
 python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 ```
 
+For production, set `ENVIRONMENT=production`, disable API documentation with
+`DOCS_ENABLED=false`, use a unique database password and JWT secret, and put
+the application behind an HTTPS reverse proxy. PostgreSQL and Redis are kept
+on the Compose-internal network; the public entry point is Nginx on port 80.
+
 The API applies bearer authentication to workflow, execution, approval, and integration operations. New users receive a private organization. GitHub credentials are encrypted before storage; webhook requests are rejected unless signature verification is configured.
 
 ## Main structure

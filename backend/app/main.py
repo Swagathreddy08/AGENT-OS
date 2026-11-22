@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -8,11 +10,18 @@ from app.core.config import settings
 from app.core.database import SessionLocal, engine
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    yield
+    await engine.dispose()
+
+
 app = FastAPI(
     title="AgentOS",
     version="0.1.0",
     docs_url="/docs" if settings.docs_enabled else None,
     redoc_url=None,
+    lifespan=lifespan,
 )
 app.add_middleware(
     CORSMiddleware,
@@ -37,8 +46,3 @@ async def readiness() -> JSONResponse:
         return JSONResponse({"status": "ready"})
     except Exception:
         return JSONResponse({"status": "not_ready"}, status_code=503)
-
-
-@app.on_event("shutdown")
-async def shutdown() -> None:
-    await engine.dispose()
