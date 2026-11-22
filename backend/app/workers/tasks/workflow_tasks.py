@@ -64,9 +64,38 @@ async def _execute(
                 await db.refresh(execution)
                 return execution.status != ExecutionStatus.CANCELLED
 
-            state = await WorkflowExecutor(graph, should_continue=should_continue).execute(
-                {"input": input_data, "nodes": {}}
-            )
+            async def classifier_handler(state: dict, config: dict) -> dict:
+                source_text = str(state.get("input", {}).get("text", "")).lower()
+                category = "bug" if any(word in source_text for word in ("bug", "error", "crash")) else "general"
+                return {"category": category, "condition": category == "bug"}
+
+            async def passthrough_handler(state: dict, config: dict) -> dict:
+                return {"status": "completed", "config": config}
+
+            async def approval_handler(state: dict, config: dict) -> dict:
+                return {"status": "waiting_approval", "config": config}
+
+            handlers = {
+                "text_classifier": classifier_handler,
+                "if_else": passthrough_handler,
+                "approval": approval_handler,
+                "human_approval": approval_handler,
+                "ai_agent": passthrough_handler,
+                "llm_completion": passthrough_handler,
+                "summarizer": passthrough_handler,
+                "switch": passthrough_handler,
+                "merge": passthrough_handler,
+                "loop": passthrough_handler,
+                "github_api": passthrough_handler,
+                "http_request": passthrough_handler,
+                "database_query": passthrough_handler,
+            }
+
+            state = await WorkflowExecutor(
+                graph,
+                handlers=handlers,
+                should_continue=should_continue,
+            ).execute({"input": input_data, "nodes": {}})
         except Exception as exc:
             execution.status = ExecutionStatus.FAILED
             execution.error = str(exc)

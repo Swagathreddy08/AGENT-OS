@@ -5,7 +5,9 @@ import {
   ReactFlow,
   Background,
   Controls,
+  Handle,
   MiniMap,
+  Position,
   addEdge,
   useEdgesState,
   useNodesState,
@@ -58,7 +60,9 @@ const nodeTypeLabels: Record<string, string> = {
 function AgentNode({ data }: { data: Record<string, unknown> }) {
   return (
     <div className="min-w-[150px] rounded-md border border-slate-600 bg-slate-100 px-3 py-2 text-center text-sm font-medium text-slate-900 shadow-lg">
+      <Handle type="target" position={Position.Left} />
       {String(data.label || "Node")}
+      <Handle type="source" position={Position.Right} />
     </div>
   );
 }
@@ -175,7 +179,15 @@ export default function WorkflowEditor({
 
     try {
       const graph = {
-        nodes: nodes.map((node) => ({ ...node, type: getBackendNodeType(node.id) })),
+        nodes: nodes.map((node) => ({
+          id: node.id,
+          type: String(node.data.backendType || "manual_trigger"),
+          position: node.position,
+          data: {
+            label: String(node.data.label || ""),
+            description: String(node.data.description || ""),
+          },
+        })),
         edges,
       };
       const workflow = workflowId
@@ -276,6 +288,8 @@ export default function WorkflowEditor({
             {availableNodes.map((nodeName) => (
               <button
                 key={nodeName}
+                type="button"
+                onClick={() => addNode(nodeName)}
                 className="mb-2 w-full rounded-md border border-slate-800 bg-slate-900/50 px-3 py-2 text-left text-sm hover:border-violet-500"
               >
                 {nodeName}
@@ -311,6 +325,7 @@ export default function WorkflowEditor({
           <ReactFlow
             nodes={nodes}
             edges={edges}
+            nodeTypes={agentNodeTypes}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={handleConnect}
@@ -325,7 +340,22 @@ export default function WorkflowEditor({
 
         <div className="border-t border-slate-800 p-4">
           <p className="mb-2 text-xs text-slate-500">EXECUTION LOG</p>
-          <div className="text-xs text-slate-400">No active execution</div>
+          {executionLogs.length === 0 ? (
+            <div className="text-xs text-slate-400">
+              {executionId ? "Waiting for worker..." : "No active execution"}
+            </div>
+          ) : (
+            <div className="max-h-28 space-y-1 overflow-y-auto text-xs">
+              {executionLogs.map((log) => (
+                <div key={`${log.node_id}-${log.attempt || 1}`} className="flex justify-between gap-2">
+                  <span className="truncate text-slate-300">{log.node_id}</span>
+                  <span className={log.status === "failed" ? "text-red-400" : "text-slate-400"}>
+                    {log.status}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </section>
 
@@ -339,7 +369,8 @@ export default function WorkflowEditor({
               Name
               <input
                 className="mt-1 w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2"
-                defaultValue={String(selectedNode.data.label)}
+                value={String(selectedNode.data.label || "")}
+                onChange={(event) => updateSelectedNode("label", event.target.value)}
               />
             </label>
             <label className="block text-sm">
@@ -347,6 +378,8 @@ export default function WorkflowEditor({
               <textarea
                 className="mt-1 w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2"
                 rows={4}
+                value={String(selectedNode.data.description || "")}
+                onChange={(event) => updateSelectedNode("description", event.target.value)}
               />
             </label>
           </div>

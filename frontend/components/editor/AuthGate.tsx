@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
+import axios from "axios";
 
 import WorkflowEditor from "@/components/editor/WorkflowEditor";
 import { api } from "@/lib/api";
@@ -44,8 +45,25 @@ export default function AuthGate() {
       window.sessionStorage.setItem(ACCESS_TOKEN_KEY, response.data.access_token);
       window.sessionStorage.setItem(REFRESH_TOKEN_KEY, response.data.refresh_token);
       setAuthenticated(true);
-    } catch {
-      setError("Sign in failed. Check your credentials and API connection.");
+    } catch (requestError) {
+      if (axios.isAxiosError(requestError)) {
+        const status = requestError.response?.status;
+        if (isRegistering && status === 409) {
+          setIsRegistering(false);
+          setError("An account already exists for this email. Sign in instead.");
+          return;
+        }
+        if (!isRegistering && status === 401) {
+          setError("Email or password is incorrect. Check your details and try again.");
+          return;
+        }
+        if (status === 422) {
+          setError("Check that your email and password are valid.");
+          return;
+        }
+      }
+
+      setError("Could not reach the service. Check your connection and try again.");
     }
   }
 
@@ -101,7 +119,7 @@ export default function AuthGate() {
         </label>
 
         {error && (
-          <p role="alert" className="mb-3 text-sm text-red-400">
+          <p role="alert" aria-live="polite" className="mb-3 text-sm text-red-400">
             {error}
           </p>
         )}
