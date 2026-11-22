@@ -1,6 +1,7 @@
-from datetime import datetime, timedelta, timezone
 import bcrypt
 import hashlib
+from datetime import datetime, timedelta, timezone
+
 from jose import JWTError, jwt
 
 from app.core.config import settings
@@ -26,12 +27,20 @@ def verify_password(password: str, password_hash: str) -> bool:
 
 def create_access_token(subject: str) -> str:
     expires = datetime.now(timezone.utc) + timedelta(minutes=settings.access_token_minutes)
-    return jwt.encode({"sub": subject, "exp": expires, "type": "access"}, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+    return jwt.encode(
+        {"sub": subject, "exp": expires, "type": "access"},
+        settings.jwt_secret,
+        algorithm=settings.jwt_algorithm,
+    )
 
 
 def create_refresh_token(subject: str) -> str:
     expires = datetime.now(timezone.utc) + timedelta(days=settings.refresh_token_days)
-    return jwt.encode({"sub": subject, "exp": expires, "type": "refresh"}, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+    return jwt.encode(
+        {"sub": subject, "exp": expires, "type": "refresh"},
+        settings.jwt_secret,
+        algorithm=settings.jwt_algorithm,
+    )
 
 
 def decode_token(token: str, expected_type: str = "access") -> str | None:

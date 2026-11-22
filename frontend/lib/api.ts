@@ -2,6 +2,8 @@ import axios from "axios";
 
 const apiBaseUrl =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+const accessTokenKey = "agentos_access_token";
+const refreshTokenKey = "agentos_refresh_token";
 
 export const api = axios.create({
   baseURL: apiBaseUrl,
@@ -9,7 +11,7 @@ export const api = axios.create({
 
 api.interceptors.request.use((config) => {
   if (typeof window !== "undefined") {
-    const token = window.sessionStorage.getItem("agentos_access_token");
+    const token = window.sessionStorage.getItem(accessTokenKey);
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
@@ -19,6 +21,16 @@ api.interceptors.request.use((config) => {
 });
 
 let refreshPromise: Promise<string> | null = null;
+
+function clearTokens(): void {
+  window.sessionStorage.removeItem(accessTokenKey);
+  window.sessionStorage.removeItem(refreshTokenKey);
+}
+
+function storeTokens(accessToken: string, refreshToken: string): void {
+  window.sessionStorage.setItem(accessTokenKey, accessToken);
+  window.sessionStorage.setItem(refreshTokenKey, refreshToken);
+}
 
 api.interceptors.response.use(
   (response) => response,
@@ -36,9 +48,9 @@ api.interceptors.response.use(
       return Promise.reject(error);
     }
 
-    const refreshToken = window.sessionStorage.getItem("agentos_refresh_token");
+    const refreshToken = window.sessionStorage.getItem(refreshTokenKey);
     if (!refreshToken) {
-      window.sessionStorage.removeItem("agentos_access_token");
+      clearTokens();
       return Promise.reject(error);
     }
 
@@ -46,12 +58,8 @@ api.interceptors.response.use(
       refreshPromise ??= api
         .post("/auth/refresh", { refresh_token: refreshToken })
         .then((response) => {
-          window.sessionStorage.setItem(
-            "agentos_access_token",
+          storeTokens(
             response.data.access_token,
-          );
-          window.sessionStorage.setItem(
-            "agentos_refresh_token",
             response.data.refresh_token,
           );
           return response.data.access_token as string;
@@ -65,8 +73,7 @@ api.interceptors.response.use(
       originalRequest.headers.Authorization = `Bearer ${accessToken}`;
       return api(originalRequest);
     } catch {
-      window.sessionStorage.removeItem("agentos_access_token");
-      window.sessionStorage.removeItem("agentos_refresh_token");
+      clearTokens();
       return Promise.reject(error);
     }
   },
