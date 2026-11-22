@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import logging
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,6 +13,9 @@ from sqlalchemy import text
 from app.api.v1.router import router
 from app.core.config import settings
 from app.core.database import SessionLocal, engine
+
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -61,5 +65,6 @@ async def readiness() -> JSONResponse:
         async with SessionLocal() as db:
             await db.execute(text("SELECT 1"))
         return JSONResponse({"status": "ready"})
-    except Exception:
+    except Exception as exc:
+        logger.exception("Readiness check failed: %s", exc)
         return JSONResponse({"status": "not_ready"}, status_code=503)

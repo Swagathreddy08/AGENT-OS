@@ -12,7 +12,6 @@ def validate_graph(graph: WorkflowGraph) -> list[str]:
         errors.append("Workflow contains duplicate node IDs.")
     id_set = set(ids)
     incoming: dict[str, int] = defaultdict(int)
-    outgoing: dict[str, int] = defaultdict(int)
 
     for edge in graph.edges:
         if edge.source not in id_set:
@@ -22,7 +21,6 @@ def validate_graph(graph: WorkflowGraph) -> list[str]:
         if edge.source == edge.target:
             errors.append(f"Edge {edge.id} creates a self-loop.")
         incoming[edge.target] += 1
-        outgoing[edge.source] += 1
 
     triggers = [node for node in graph.nodes if node.type in TRIGGER_TYPES]
     if not triggers:

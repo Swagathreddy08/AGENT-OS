@@ -70,3 +70,23 @@ async def test_executor_evaluates_conditional_branches():
     assert state["nodes"]["condition"]["condition"] is True
     assert "true_action" in state["nodes"]
     assert "false_action" not in state["nodes"]
+
+
+@pytest.mark.asyncio
+async def test_executor_stops_when_cancelled():
+    graph = WorkflowGraph(
+        nodes=[
+            WorkflowNode(id="trigger", type="manual_trigger"),
+            WorkflowNode(id="action", type="http_request"),
+        ],
+        edges=[WorkflowEdge(id="edge", source="trigger", target="action")],
+    )
+    initial_state = {"input": {}, "nodes": {}}
+
+    async def should_continue():
+        return False
+
+    state = await WorkflowExecutor(graph, should_continue=should_continue).execute(initial_state)
+    assert state["cancelled"] is True
+    assert "action" not in state["nodes"]
+    assert initial_state["nodes"] == {}

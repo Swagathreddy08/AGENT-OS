@@ -8,7 +8,7 @@ from app.workers.celery_app import celery_app
 
 
 async def _execute(execution_id: str, graph_data: dict, input_data: dict, retry_attempt: int = 0) -> dict:
-    from app.core.database import SessionLocal, engine
+    from app.core.database import SessionLocal
     from app.models.entities import ExecutionStatus, WorkflowExecution
     from app.schemas.workflow import WorkflowGraph
     from app.workflow_engine.executor import WorkflowExecutor
@@ -47,7 +47,14 @@ async def _execute(execution_id: str, graph_data: dict, input_data: dict, retry_
                 errors = validate_graph(graph)
                 if errors:
                     raise ValueError("; ".join(errors))
-                state = await WorkflowExecutor(graph).execute({"input": input_data, "nodes": {}})
+
+                async def should_continue() -> bool:
+                    await db.refresh(execution)
+                    return execution.status != ExecutionStatus.CANCELLED
+
+                state = await WorkflowExecutor(graph, should_continue=should_continue).execute(
+                    {"input": input_data, "nodes": {}}
+                )
             except Exception as exc:
                 execution.status = ExecutionStatus.FAILED
                 execution.error = str(exc)
@@ -56,12 +63,13 @@ async def _execute(execution_id: str, graph_data: dict, input_data: dict, retry_
                 raise
 
             execution.state = state
-            execution.status = ExecutionStatus.COMPLETED
+            if state.pop("cancelled", False):
+                execution.status = ExecutionStatus.CANCELLED
+            else:
+                execution.status = ExecutionStatus.COMPLETED
             execution.completed_at = datetime.utcnow()
             await db.commit()
             return {"execution_id": execution_id, "status": "completed", "state": state}
-    finally:
-        await engine.dispose()
 
 
 @celery_app.task(bind=True, autoretry_for=(Exception,), retry_backoff=True, max_retries=3)
