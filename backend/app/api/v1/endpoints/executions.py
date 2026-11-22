@@ -106,7 +106,11 @@ async def cancel_execution(
         update(WorkflowExecution)
         .where(
             WorkflowExecution.id == execution.id,
-            WorkflowExecution.status == ExecutionStatus.QUEUED,
+            WorkflowExecution.status.in_({
+                ExecutionStatus.QUEUED,
+                ExecutionStatus.RUNNING,
+                ExecutionStatus.WAITING_APPROVAL,
+            }),
         )
         .values(status=ExecutionStatus.CANCELLED)
     )
@@ -114,9 +118,8 @@ async def cancel_execution(
         await db.rollback()
         raise HTTPException(
             status.HTTP_409_CONFLICT,
-            "Only queued executions can be cancelled.",
+            "This execution can no longer be cancelled.",
         )
     await db.commit()
-    await db.refresh(execution)
     await db.refresh(execution)
     return _execution_response(execution)
