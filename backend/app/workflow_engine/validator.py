@@ -3,6 +3,21 @@ from app.schemas.workflow import WorkflowGraph
 
 
 TRIGGER_TYPES = {"manual_trigger", "github_issue_created", "github_pr_created", "webhook_trigger", "scheduled_trigger"}
+SUPPORTED_NODE_TYPES = TRIGGER_TYPES | {
+    "ai_agent",
+    "llm_completion",
+    "text_classifier",
+    "summarizer",
+    "if_else",
+    "switch",
+    "merge",
+    "loop",
+    "approval",
+    "human_approval",
+    "github_api",
+    "http_request",
+    "database_query",
+}
 
 
 def validate_graph(graph: WorkflowGraph) -> list[str]:
@@ -12,6 +27,10 @@ def validate_graph(graph: WorkflowGraph) -> list[str]:
         errors.append("Workflow contains duplicate node IDs.")
     id_set = set(ids)
     incoming: dict[str, int] = defaultdict(int)
+
+    for node in graph.nodes:
+        if node.type not in SUPPORTED_NODE_TYPES:
+            errors.append(f"Node {node.id} uses unsupported type '{node.type}'.")
 
     for edge in graph.edges:
         if edge.source not in id_set:

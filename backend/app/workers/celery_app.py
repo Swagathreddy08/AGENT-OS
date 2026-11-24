@@ -23,6 +23,10 @@ celery_app.conf.update(
             "task": "app.workers.tasks.workflow_tasks.requeue_stuck_executions",
             "schedule": timedelta(seconds=60),
         },
+        "run-scheduled-workflows": {
+            "task": "app.workers.tasks.workflow_tasks.run_scheduled_workflows",
+            "schedule": timedelta(seconds=60),
+        },
     },
 )
 celery_app.conf.imports = ("app.workers.tasks.workflow_tasks",)

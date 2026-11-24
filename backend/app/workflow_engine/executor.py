@@ -3,6 +3,7 @@ from collections import defaultdict, deque
 from typing import Any
 
 from app.schemas.workflow import WorkflowGraph
+from app.workflow_engine.errors import ApprovalRequired, NonRetryableWorkflowError
 
 TRIGGER_TYPES = {
     "manual_trigger",
@@ -21,10 +22,14 @@ class WorkflowExecutor:
         graph: WorkflowGraph,
         handlers: dict[str, Any] | None = None,
         should_continue: Any | None = None,
+        on_node_complete: Any | None = None,
+        on_node_error: Any | None = None,
     ):
         self.graph = graph
         self.handlers = handlers or {}
         self.should_continue = should_continue
+        self.on_node_complete = on_node_complete
+        self.on_node_error = on_node_error
 
     async def execute(self, initial_state: dict[str, Any]) -> dict[str, Any]:
         state = dict(initial_state)
@@ -49,14 +54,34 @@ class WorkflowExecutor:
                 state["cancelled"] = True
                 return state
 
-            output = await self._run_node(node_by_id[node_id], state)
-            node_state[node_id] = output
+            state["_active_node_id"] = node_id
+            try:
+                if node_id in node_state:
+                    output = node_state[node_id]
+                else:
+                    try:
+                        output = await self._run_node(node_by_id[node_id], state)
+                    except ApprovalRequired:
+                        raise
+                    except Exception as exc:
+                        if self.on_node_error is not None:
+                            result = self.on_node_error(node_id, exc, state)
+                            if inspect.isawaitable(result):
+                                await result
+                        raise
+                    node_state[node_id] = output
+                    if self.on_node_complete is not None:
+                        result = self.on_node_complete(node_id, output, state)
+                        if inspect.isawaitable(result):
+                            await result
+            finally:
+                state.pop("_active_node_id", None)
 
             for edge in adjacency[node_id]:
                 matches = self._edge_matches(edge, output)
                 handle = getattr(edge, "sourceHandle", None)
 
-                if handle not in {"true", "false"} or matches:
+                if handle is None or matches:
                     indegree[edge.target] -= 1
                 elif incoming_count[edge.target] > 1:
                     indegree[edge.target] -= 1
@@ -81,7 +106,9 @@ class WorkflowExecutor:
         if handler is None:
             if node.type in TRIGGER_TYPES:
                 return dict(state.get("input", {}))
-            raise ValueError(f"No handler is registered for node type '{node.type}'.")
+            raise NonRetryableWorkflowError(
+                f"No handler is registered for node type '{node.type}'."
+            )
 
         return await handler(state, node.data)
 
@@ -89,8 +116,13 @@ class WorkflowExecutor:
     def _edge_matches(edge: Any, output: dict[str, Any]) -> bool:
         handle = getattr(edge, "sourceHandle", None)
         if handle not in {"true", "false"}:
-            return True
+            route = output.get("route")
+            return handle is None or (
+                isinstance(route, str) and route == handle
+            )
         condition = output.get("condition")
         if not isinstance(condition, bool):
-            raise ValueError("Conditional edge output must include a boolean 'condition'.")
+            raise NonRetryableWorkflowError(
+                "Conditional edge output must include a boolean 'condition'."
+            )
         return handle == ("true" if condition else "false")

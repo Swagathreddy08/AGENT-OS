@@ -1,15 +1,17 @@
 from uuid import UUID
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.dependencies import get_current_user, get_user_organization_id
-from app.models.entities import ApprovalRequest, User, Workflow, WorkflowExecution
+from app.models.entities import ApprovalRequest, ExecutionStatus, User, Workflow, WorkflowExecution
 
 router = APIRouter(prefix="/approvals", tags=["approvals"])
+logger = logging.getLogger(__name__)
 
 
 class ApprovalDecision(BaseModel):
@@ -70,10 +72,36 @@ async def approve(
     approval = await _get_approval(approval_id, organization_id, db)
     if approval.status != "pending":
         raise HTTPException(status.HTTP_409_CONFLICT, "Approval has already been decided")
+    execution = await db.get(WorkflowExecution, approval.execution_id)
+    if execution is None or execution.status != ExecutionStatus.WAITING_APPROVAL:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Execution is not waiting for this approval")
     approval.status = "approved"
     approval.decision = payload.decision
+    execution.state = {
+        **(execution.state or {}),
+        "approvals": {
+            **(execution.state or {}).get("approvals", {}),
+            approval.node_id: {"status": "approved", "decision": payload.decision},
+        },
+    }
+    execution.status = ExecutionStatus.QUEUED
+    execution.started_at = None
+    execution.completed_at = None
+    execution.error = None
     await db.commit()
-    return {"id": str(approval.id), "status": approval.status, "decision": approval.decision}
+    try:
+        from app.workers.tasks.workflow_tasks import execute_workflow_task
+
+        execute_workflow_task.delay(str(execution.id))
+    except Exception:
+        logger.exception("Unable to enqueue approved execution %s", execution.id)
+    return {
+        "id": str(approval.id),
+        "status": approval.status,
+        "decision": approval.decision,
+        "execution_id": str(execution.id),
+        "execution_status": execution.status.value,
+    }
 
 
 @router.post("/{approval_id}/reject")
@@ -87,7 +115,13 @@ async def reject(
     approval = await _get_approval(approval_id, organization_id, db)
     if approval.status != "pending":
         raise HTTPException(status.HTTP_409_CONFLICT, "Approval has already been decided")
+    execution = await db.get(WorkflowExecution, approval.execution_id)
+    if execution is None or execution.status != ExecutionStatus.WAITING_APPROVAL:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Execution is not waiting for this approval")
     approval.status = "rejected"
     approval.decision = payload.decision
+    execution.status = ExecutionStatus.FAILED
+    execution.error = f"Approval rejected at node '{approval.node_id}'."
+    execution.completed_at = execution.completed_at or execution.created_at
     await db.commit()
     return {"id": str(approval.id), "status": approval.status, "decision": approval.decision}

@@ -58,6 +58,70 @@ async def _get_workflow(workflow_id: UUID, organization_id: UUID, db: AsyncSessi
     return workflow
 
 
+async def queue_workflow_execution(
+    workflow: Workflow,
+    input_data: dict,
+    db: AsyncSession,
+    request_key: str | None = None,
+) -> dict:
+    graph = WorkflowGraph.model_validate(workflow.graph)
+    errors = validate_graph(graph)
+    if errors:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"errors": errors},
+        )
+
+    idempotency_key = None
+    if request_key:
+        scoped_key = f"{workflow.organization_id}:{workflow.id}:{request_key}"
+        idempotency_key = hashlib.sha256(scoped_key.encode()).hexdigest()
+        existing = await db.scalar(
+            select(WorkflowExecution).where(
+                WorkflowExecution.idempotency_key == idempotency_key
+            )
+        )
+        if existing is not None:
+            return _execution_response(existing)
+
+    execution = WorkflowExecution(
+        workflow_id=workflow.id,
+        workflow_version=workflow.current_version,
+        status=ExecutionStatus.QUEUED,
+        idempotency_key=idempotency_key,
+        input=input_data,
+        state={"nodes": {}},
+    )
+    db.add(execution)
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        if idempotency_key is None:
+            raise
+        existing = await db.scalar(
+            select(WorkflowExecution).where(
+                WorkflowExecution.idempotency_key == idempotency_key
+            )
+        )
+        if existing is None:
+            raise
+        return _execution_response(existing)
+    await db.refresh(execution)
+
+    try:
+        from app.workers.tasks.workflow_tasks import execute_workflow_task
+
+        execute_workflow_task.delay(str(execution.id))
+    except Exception as exc:
+        logger.exception("Unable to enqueue workflow execution %s", execution.id)
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "Workflow was saved and will be retried by the queue recovery service.",
+        ) from exc
+    return _execution_response(execution)
+
+
 @router.post("", status_code=status.HTTP_201_CREATED)
 async def create_workflow(
     payload: WorkflowCreate,
@@ -172,48 +236,9 @@ async def execute_workflow(
 ) -> dict:
     organization_id = await get_user_organization_id(user, db)
     workflow = await _get_workflow(workflow_id, organization_id, db)
-    graph = WorkflowGraph.model_validate(workflow.graph)
-    errors = validate_graph(graph)
-    if errors:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"errors": errors})
-
-    idempotency_key = None
-    if payload.idempotency_key:
-        scoped_key = f"{organization_id}:{workflow_id}:{payload.idempotency_key}"
-        idempotency_key = hashlib.sha256(scoped_key.encode()).hexdigest()
-        existing = await db.scalar(
-            select(WorkflowExecution).where(WorkflowExecution.idempotency_key == idempotency_key)
-        )
-        if existing is not None:
-            return _execution_response(existing)
-
-    execution = WorkflowExecution(
-        workflow_id=workflow.id,
-        workflow_version=workflow.current_version,
-        status=ExecutionStatus.QUEUED,
-        idempotency_key=idempotency_key,
-        input=payload.input,
-        state={"nodes": {}},
+    return await queue_workflow_execution(
+        workflow,
+        payload.input,
+        db,
+        payload.idempotency_key,
     )
-    db.add(execution)
-    try:
-        await db.commit()
-    except IntegrityError:
-        await db.rollback()
-        if idempotency_key is None:
-            raise
-        existing = await db.scalar(
-            select(WorkflowExecution).where(WorkflowExecution.idempotency_key == idempotency_key)
-        )
-        if existing is None:
-            raise
-        return _execution_response(existing)
-    await db.refresh(execution)
-
-    try:
-        from app.workers.tasks.workflow_tasks import execute_workflow_task
-        execute_workflow_task.delay(str(execution.id), graph.model_dump(mode="json"), payload.input)
-    except Exception as exc:
-        logger.exception("Unable to enqueue workflow execution %s", execution.id)
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Workflow queue is unavailable") from exc
-    return _execution_response(execution)

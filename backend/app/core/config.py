@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     github_webhook_secret: str = ""
     encryption_key: str = ""
+    http_allowed_hosts: str = ""
+    database_allowed_hosts: str = ""
 
     @model_validator(mode="after")
     def validate_production_settings(self) -> "Settings":
@@ -32,5 +34,11 @@ class Settings(BaseSettings):
 
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+    def http_allowed_host_list(self) -> list[str]:
+        return [host.strip().lower() for host in self.http_allowed_hosts.split(",") if host.strip()]
+
+    def database_allowed_host_list(self) -> list[str]:
+        return [host.strip().lower() for host in self.database_allowed_hosts.split(",") if host.strip()]
 
 settings = Settings()

@@ -90,3 +90,67 @@ async def test_executor_stops_when_cancelled():
     assert state["cancelled"] is True
     assert "action" not in state["nodes"]
     assert initial_state["nodes"] == {}
+
+
+@pytest.mark.asyncio
+async def test_executor_resumes_from_checkpoint_without_rerunning_completed_nodes():
+    graph = WorkflowGraph(
+        nodes=[
+            WorkflowNode(id="trigger", type="manual_trigger"),
+            WorkflowNode(id="first", type="http_request"),
+            WorkflowNode(id="second", type="http_request"),
+        ],
+        edges=[
+            WorkflowEdge(id="edge1", source="trigger", target="first"),
+            WorkflowEdge(id="edge2", source="first", target="second"),
+        ],
+    )
+    calls = []
+
+    async def handler(state, config):
+        calls.append(config["name"])
+        return {"name": config["name"]}
+
+    state = await WorkflowExecutor(
+        graph,
+        {"http_request": handler},
+    ).execute(
+        {
+            "input": {},
+            "nodes": {"first": {"name": "first"}},
+        }
+    )
+
+    assert calls == ["second"]
+    assert state["nodes"]["second"] == {"name": "second"}
+
+
+@pytest.mark.asyncio
+async def test_executor_routes_switch_handles_by_route_name():
+    graph = WorkflowGraph(
+        nodes=[
+            WorkflowNode(id="trigger", type="manual_trigger"),
+            WorkflowNode(id="switch", type="switch"),
+            WorkflowNode(id="bug", type="http_request"),
+            WorkflowNode(id="other", type="http_request"),
+        ],
+        edges=[
+            WorkflowEdge(id="edge1", source="trigger", target="switch"),
+            WorkflowEdge(id="edge2", source="switch", target="bug", sourceHandle="bug"),
+            WorkflowEdge(id="edge3", source="switch", target="other", sourceHandle="other"),
+        ],
+    )
+
+    async def switch_handler(state, config):
+        return {"route": "bug"}
+
+    state = await WorkflowExecutor(
+        graph,
+        {"switch": switch_handler, "http_request": lambda state, config: async_output()},
+    ).execute({"input": {}, "nodes": {}})
+    assert "bug" in state["nodes"]
+    assert "other" not in state["nodes"]
+
+
+async def async_output():
+    return {"ok": True}

@@ -38,4 +38,4 @@ class WorkflowUpdate(BaseModel):
 
 class ExecuteRequest(BaseModel):
     input: dict[str, Any] = Field(default_factory=dict)
-    idempotency_key: str | None = None
+    idempotency_key: str | None = Field(default=None, max_length=255)
