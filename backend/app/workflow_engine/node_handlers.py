@@ -8,10 +8,11 @@ import httpx
 from cryptography.fernet import Fernet, InvalidToken
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy import select, text
+from sqlalchemy.exc import DBAPIError, OperationalError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.core.config import settings
-from app.models.entities import ApprovalRequest, Integration
+from app.models.entities import Integration
 from app.workflow_engine.errors import ApprovalRequired, NonRetryableWorkflowError
 
 
@@ -69,7 +70,10 @@ def _render_template(value: Any, state: dict) -> Any:
 
 
 def _public_http_url(url: str) -> str:
-    parsed = urlparse(url)
+    try:
+        parsed = urlparse(url)
+    except ValueError as exc:
+        raise NonRetryableWorkflowError("HTTP Request URL is invalid.") from exc
     if (
         parsed.scheme != "https"
         or not parsed.hostname
@@ -94,7 +98,7 @@ def create_node_handlers(
     organization_id,
     incoming_nodes: dict[str, list[str]],
 ) -> dict[str, Callable]:
-    async def classifier(state: dict, config: dict) -> dict:
+    async def classifier(state: dict, _config: dict) -> dict:
         source = state.get("input", {})
         if isinstance(source, dict):
             issue = source.get("issue", {})
@@ -131,7 +135,7 @@ def create_node_handlers(
             )
         return {"value": value, "route": route}
 
-    async def merge(state: dict, config: dict) -> dict:
+    async def merge(state: dict, _config: dict) -> dict:
         node_id = state.get("_active_node_id")
         node_ids = incoming_nodes.get(node_id, [])
         return {
@@ -177,7 +181,10 @@ def create_node_handlers(
             raise NonRetryableWorkflowError("OPENAI_API_KEY is not configured.")
         prompt = config.get("prompt")
         if not isinstance(prompt, str) or not prompt.strip():
-            prompt = json.dumps(state.get("input", {}), ensure_ascii=False)
+            prompt = json.dumps(
+                {"input": state.get("input", {}), "nodes": state.get("nodes", {})},
+                ensure_ascii=False,
+            )
         prompt = _render_template(prompt, state)
         model = config.get("model", "gpt-4o-mini")
         if not isinstance(model, str) or len(model) > 100:
@@ -329,8 +336,17 @@ def create_node_handlers(
             "content-length",
             "transfer-encoding",
             "upgrade",
+            "x-api-key",
+            "api-key",
+            "x-auth-token",
+            "x-access-token",
         }
-        if any(str(key).lower() in blocked_headers for key in headers):
+        if any(
+            str(key).lower() in blocked_headers
+            or "authorization" in str(key).lower()
+            or "token" in str(key).lower()
+            for key in headers
+        ):
             raise NonRetryableWorkflowError("HTTP Request cannot set credential or routing headers.")
         rendered_headers = {
             **_render_template(headers, state),
@@ -366,7 +382,7 @@ def create_node_handlers(
             response_body = content.decode("utf-8", errors="replace")[:100_000]
         return {"status_code": response.status_code, "body": jsonable_encoder(response_body)}
 
-    async def database_query(state: dict, config: dict) -> dict:
+    async def database_query(_state: dict, config: dict) -> dict:
         integration = await db.scalar(
             select(Integration).where(
                 Integration.organization_id == organization_id,
@@ -419,6 +435,18 @@ def create_node_handlers(
                     )
                     rows = [dict(row) for row in result.mappings().all()]
                     return {"rows": jsonable_encoder(rows), "row_count": len(rows)}
+        except OperationalError as exc:
+            raise RuntimeError("Organization database is temporarily unavailable.") from exc
+        except DBAPIError as exc:
+            if exc.connection_invalidated:
+                raise
+            raise NonRetryableWorkflowError(
+                "Database query failed; inspect the statement, parameters, and database permissions."
+            ) from exc
+        except SQLAlchemyError as exc:
+            raise NonRetryableWorkflowError(
+                "Database query failed; inspect the statement, parameters, and database permissions."
+            ) from exc
         finally:
             await engine.dispose()
 

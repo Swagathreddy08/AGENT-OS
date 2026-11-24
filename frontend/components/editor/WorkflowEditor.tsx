@@ -30,6 +30,7 @@ interface WorkflowResponse {
 interface ExecutionResponse {
   id: string;
   status: string;
+  error?: string | null;
 }
 
 interface ExecutionLog {
@@ -82,7 +83,7 @@ function AgentNode({ data }: { data: Record<string, unknown> }) {
         )
       : [];
   const sourceHandles =
-    backendType === "if_else"
+    backendType === "if_else" || backendType === "text_classifier"
       ? ["true", "false"]
       : backendType === "switch"
         ? Array.from(
@@ -189,6 +190,7 @@ export default function WorkflowEditor({
   const [executionId, setExecutionId] = useState<string | null>(null);
   const [executionLogs, setExecutionLogs] = useState<ExecutionLog[]>([]);
   const [nodeConfigText, setNodeConfigText] = useState("{}");
+  const [nodeConfigTextId, setNodeConfigTextId] = useState<string | null>(null);
   const [githubToken, setGithubToken] = useState("");
   const [githubRepository, setGithubRepository] = useState("");
   const [githubAccount, setGithubAccount] = useState("");
@@ -196,6 +198,7 @@ export default function WorkflowEditor({
   const [approvals, setApprovals] = useState<ApprovalResponse[]>([]);
 
   useEffect(() => {
+    setNodeConfigTextId(selectedNode?.id || null);
     setNodeConfigText(
       JSON.stringify(selectedNode?.data.config || {}, null, 2),
     );
@@ -210,7 +213,7 @@ export default function WorkflowEditor({
           setApprovals(response.data.filter((approval) => approval.status === "pending"));
         }
       } catch {
-        if (!stopped) setApprovals([]);
+        if (!stopped) setMessage("Unable to refresh pending approvals");
       }
     }
 
@@ -240,7 +243,9 @@ export default function WorkflowEditor({
 
         setExecutionLogs(logs.data);
         setMessage(
-          `Execution ${execution.data.status} · ${execution.data.id.slice(0, 8)}`,
+          execution.data.status === "failed" && execution.data.error
+            ? `Execution failed · ${execution.data.error}`
+            : `Execution ${execution.data.status} · ${execution.data.id.slice(0, 8)}`,
         );
 
         if (["completed", "failed", "cancelled"].includes(execution.data.status)) {
@@ -270,7 +275,10 @@ export default function WorkflowEditor({
     setMessage("Saving...");
 
     try {
-      const selectedConfig = JSON.parse(nodeConfigText) as unknown;
+      const selectedConfig =
+        selectedNode?.id && nodeConfigTextId === selectedNode.id
+          ? (JSON.parse(nodeConfigText) as unknown)
+          : selectedNode?.data.config || {};
       if (
         selectedConfig === null ||
         typeof selectedConfig !== "object" ||
@@ -410,7 +418,7 @@ export default function WorkflowEditor({
       setApprovals(
         refreshed.data.filter((approval) => approval.status === "pending"),
       );
-      setMessage(`Approval ${action}d`);
+      setMessage(action === "approve" ? "Approval approved" : "Approval rejected");
     } catch {
       setMessage(`Unable to ${action} approval`);
     }
@@ -501,8 +509,13 @@ export default function WorkflowEditor({
               {executionLogs.map((log) => (
                 <div key={`${log.node_id}-${log.attempt || 1}`} className="flex justify-between gap-2">
                   <span className="truncate text-slate-300">{log.node_id}</span>
-                  <span className={log.status === "failed" ? "text-red-400" : "text-slate-400"}>
-                    {log.status}
+                  <span
+                    title={log.error}
+                    className={`max-w-[70%] truncate ${
+                      log.status === "failed" ? "text-red-400" : "text-slate-400"
+                    }`}
+                  >
+                    {log.error ? `${log.status}: ${log.error}` : log.status}
                   </span>
                 </div>
               ))}

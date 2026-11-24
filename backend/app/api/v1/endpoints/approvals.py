@@ -1,5 +1,6 @@
 from uuid import UUID
 import logging
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -72,7 +73,11 @@ async def approve(
     approval = await _get_approval(approval_id, organization_id, db)
     if approval.status != "pending":
         raise HTTPException(status.HTTP_409_CONFLICT, "Approval has already been decided")
-    execution = await db.get(WorkflowExecution, approval.execution_id)
+    execution = await db.scalar(
+        select(WorkflowExecution)
+        .where(WorkflowExecution.id == approval.execution_id)
+        .with_for_update()
+    )
     if execution is None or execution.status != ExecutionStatus.WAITING_APPROVAL:
         raise HTTPException(status.HTTP_409_CONFLICT, "Execution is not waiting for this approval")
     approval.status = "approved"
@@ -115,13 +120,17 @@ async def reject(
     approval = await _get_approval(approval_id, organization_id, db)
     if approval.status != "pending":
         raise HTTPException(status.HTTP_409_CONFLICT, "Approval has already been decided")
-    execution = await db.get(WorkflowExecution, approval.execution_id)
+    execution = await db.scalar(
+        select(WorkflowExecution)
+        .where(WorkflowExecution.id == approval.execution_id)
+        .with_for_update()
+    )
     if execution is None or execution.status != ExecutionStatus.WAITING_APPROVAL:
         raise HTTPException(status.HTTP_409_CONFLICT, "Execution is not waiting for this approval")
     approval.status = "rejected"
     approval.decision = payload.decision
     execution.status = ExecutionStatus.FAILED
     execution.error = f"Approval rejected at node '{approval.node_id}'."
-    execution.completed_at = execution.completed_at or execution.created_at
+    execution.completed_at = datetime.now(timezone.utc).replace(tzinfo=None)
     await db.commit()
     return {"id": str(approval.id), "status": approval.status, "decision": approval.decision}

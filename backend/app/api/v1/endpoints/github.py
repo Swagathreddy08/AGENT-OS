@@ -36,7 +36,7 @@ async def github_webhook(request: Request, x_hub_signature_256: str | None = Hea
 
     issue_input = None
     trigger_type = None
-    if event == "issues" and payload.get("action") in {"opened", "edited", "reopened"}:
+    if event == "issues" and payload.get("action") in {"opened", "reopened"}:
         issue = payload.get("issue")
         if not isinstance(issue, dict) or not isinstance(issue.get("number"), int):
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid issue event payload")

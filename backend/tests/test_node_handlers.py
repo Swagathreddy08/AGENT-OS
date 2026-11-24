@@ -41,6 +41,23 @@ async def test_approval_handler_suspends_at_the_current_node():
     assert exc_info.value.node_id == "approval"
     assert exc_info.value.payload["message"] == "Review this ticket"
 
+    resumed = await handlers["approval"](
+        {
+            "_active_node_id": "approval",
+            "approvals": {
+                "approval": {
+                    "status": "approved",
+                    "decision": {"approved_by": "owner"},
+                }
+            },
+        },
+        {},
+    )
+    assert resumed == {
+        "status": "approved",
+        "decision": {"approved_by": "owner"},
+    }
+
 
 def test_http_requests_require_explicit_https_host_allowlisting(monkeypatch):
     monkeypatch.setattr(settings, "http_allowed_hosts", "api.example.com")

@@ -6,12 +6,26 @@ from fastapi.testclient import TestClient
 from app.core.config import settings
 from app.core.security import create_access_token, create_refresh_token, decode_token, hash_password, verify_password
 from app.main import app
+from app.workers.celery_app import celery_app
+from app.workers.tasks.workflow_tasks import requeue_stuck_executions, run_scheduled_workflows
 
 
 def test_health_and_readiness_endpoints():
     client = TestClient(app)
     assert client.get("/health").status_code == 200
     assert client.get("/health/ready").status_code in {200, 503}
+
+
+def test_periodic_recovery_and_schedule_tasks_are_registered():
+    assert requeue_stuck_executions.name.endswith(".requeue_stuck_executions")
+    assert run_scheduled_workflows.name.endswith(".run_scheduled_workflows")
+    scheduled_tasks = {
+        entry["task"]
+        for entry in celery_app.conf.beat_schedule.values()
+    }
+    assert "app.workers.tasks.workflow_tasks.requeue_stuck_executions" in scheduled_tasks
+    assert "app.workers.tasks.workflow_tasks.run_scheduled_workflows" in scheduled_tasks
+    assert scheduled_tasks.issubset(celery_app.tasks)
 
 
 def test_security_headers_are_added():
@@ -58,5 +72,18 @@ def test_github_webhook_signature():
             headers={"X-GitHub-Event": "issues", "X-Hub-Signature-256": "sha256=invalid"},
         )
         assert invalid.status_code == 401
+    finally:
+        settings.github_webhook_secret = original_secret
+
+
+def test_generic_workflow_webhook_requires_signature():
+    original_secret = settings.github_webhook_secret
+    settings.github_webhook_secret = "test-webhook-secret"
+    try:
+        response = TestClient(app).post(
+            "/api/v1/webhooks/workflows/00000000-0000-0000-0000-000000000001",
+            json={"event": "test"},
+        )
+        assert response.status_code == 401
     finally:
         settings.github_webhook_secret = original_secret

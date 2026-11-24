@@ -152,5 +152,31 @@ async def test_executor_routes_switch_handles_by_route_name():
     assert "other" not in state["nodes"]
 
 
+@pytest.mark.asyncio
+async def test_executor_flattens_editor_node_configuration_for_handlers():
+    graph = WorkflowGraph(
+        nodes=[
+            WorkflowNode(id="trigger", type="manual_trigger"),
+            WorkflowNode(
+                id="action",
+                type="http_request",
+                data={"label": "Send", "config": {"url": "https://api.example.com"}},
+            ),
+        ],
+        edges=[WorkflowEdge(id="edge", source="trigger", target="action")],
+    )
+    received = {}
+
+    async def handler(state, config):
+        received.update(config)
+        return {"ok": True}
+
+    await WorkflowExecutor(graph, {"http_request": handler}).execute(
+        {"input": {}, "nodes": {}}
+    )
+    assert received["url"] == "https://api.example.com"
+    assert received["label"] == "Send"
+
+
 async def async_output():
     return {"ok": True}

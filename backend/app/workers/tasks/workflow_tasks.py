@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from sqlalchemy import select, update
@@ -14,13 +14,15 @@ logger = logging.getLogger(__name__)
 
 
 def utcnow() -> datetime:
-    return datetime.utcnow()
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 async def _execute(
     execution_id: str,
     retry_attempt: int = 0,
 ) -> dict:
+    from sqlalchemy import func
+
     from app.core.database import SessionLocal
     from app.models.entities import (
         ApprovalRequest,
@@ -94,22 +96,52 @@ async def _execute(
                 await db.refresh(execution)
                 return execution.status != ExecutionStatus.CANCELLED
 
-            async def persist_node(node_id: str, output: dict, node_state: dict) -> None:
+            node_attempts: dict[str, int] = {}
+
+            async def persist_node_start(node_id: str, node_state: dict) -> None:
+                latest_attempt = await db.scalar(
+                    select(func.max(NodeExecution.attempt)).where(
+                        NodeExecution.execution_id == execution.id,
+                        NodeExecution.node_id == node_id,
+                    )
+                )
+                attempt = int(latest_attempt or 0) + 1
+                node_attempts[node_id] = attempt
                 now = utcnow()
                 db.add(
                     NodeExecution(
                         execution_id=execution.id,
                         node_id=node_id,
-                        status="completed",
+                        status="running",
                         input={"input": node_state.get("input", {})},
-                        output=output,
-                        attempt=retry_attempt + 1,
+                        attempt=attempt,
                         started_at=now,
-                        completed_at=now,
                     )
                 )
+                await db.commit()
+
+            async def persist_node(node_id: str, output: dict, node_state: dict) -> None:
+                now = utcnow()
+                log = await db.scalar(
+                    select(NodeExecution)
+                    .where(
+                        NodeExecution.execution_id == execution.id,
+                        NodeExecution.node_id == node_id,
+                        NodeExecution.attempt == node_attempts[node_id],
+                    )
+                    .order_by(NodeExecution.started_at.desc())
+                )
+                if log is None:
+                    raise RuntimeError(f"Node execution log for '{node_id}' was not created.")
+                log.status = "completed"
+                log.output = output
+                log.completed_at = now
                 execution.state = {
-                    **node_state,
+                    **{
+                        key: value
+                        for key, value in node_state.items()
+                        if key != "_active_node_id"
+                    },
                     "nodes": dict(node_state.get("nodes", {})),
                 }
                 await db.commit()
@@ -120,20 +152,26 @@ async def _execute(
                 node_state: dict,
             ) -> None:
                 now = utcnow()
-                db.add(
-                    NodeExecution(
-                        execution_id=execution.id,
-                        node_id=node_id,
-                        status="failed",
-                        input={"input": node_state.get("input", {})},
-                        error=str(error)[:2000],
-                        attempt=retry_attempt + 1,
-                        started_at=now,
-                        completed_at=now,
+                log = await db.scalar(
+                    select(NodeExecution)
+                    .where(
+                        NodeExecution.execution_id == execution.id,
+                        NodeExecution.node_id == node_id,
+                        NodeExecution.attempt == node_attempts[node_id],
                     )
+                    .order_by(NodeExecution.started_at.desc())
                 )
+                if log is None:
+                    raise RuntimeError(f"Node execution log for '{node_id}' was not created.")
+                log.status = "failed"
+                log.error = str(error)[:2000]
+                log.completed_at = now
                 execution.state = {
-                    **node_state,
+                    **{
+                        key: value
+                        for key, value in node_state.items()
+                        if key != "_active_node_id"
+                    },
                     "nodes": dict(node_state.get("nodes", {})),
                 }
                 await db.commit()
@@ -149,6 +187,7 @@ async def _execute(
                 graph,
                 handlers=handlers,
                 should_continue=should_continue,
+                on_node_start=persist_node_start,
                 on_node_complete=persist_node,
                 on_node_error=persist_node_error,
             ).execute(state)
@@ -297,7 +336,14 @@ async def _run_scheduled_workflows() -> int:
                 ),
                 None,
             )
-            config = trigger.get("data", {}).get("config", {}) if trigger else {}
+            node_data = trigger.get("data", {}) if trigger else {}
+            config = node_data.get("config", {}) if isinstance(node_data, dict) else {}
+            if not isinstance(config, dict):
+                logger.warning(
+                    "Skipping scheduled workflow %s: trigger config must be an object",
+                    workflow.id,
+                )
+                continue
             interval = config.get("interval_seconds")
             if not isinstance(interval, int) or not 60 <= interval <= 86400:
                 logger.warning(

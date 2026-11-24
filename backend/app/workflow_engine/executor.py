@@ -116,7 +116,11 @@ class WorkflowExecutor:
                 f"No handler is registered for node type '{node.type}'."
             )
 
-        return await handler(state, node.data)
+        config = dict(node.data)
+        node_config = config.pop("config", {})
+        if isinstance(node_config, dict):
+            config.update(node_config)
+        return await handler(state, config)
 
     @staticmethod
     def _edge_matches(edge: Any, output: dict[str, Any]) -> bool:

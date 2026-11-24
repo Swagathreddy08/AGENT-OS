@@ -48,12 +48,30 @@ approval pauses/resume. Configure node JSON in the editor. AI nodes require
 10-second statement timeout and a 100-row result limit. Use a least-privilege
 database role even with these controls.
 
+Examples for the node configuration JSON editor:
+
+- If / Else: `{"field":"input.issue.title","operator":"contains","value":"bug"}`
+- Switch (route values must match outgoing edge handles):
+  `{"field":"nodes.classifier.category","routes":{"bug":"bug","general":"general"}}`
+- Scheduled Trigger: `{"interval_seconds":3600}`
+- HTTP Request:
+  `{"method":"POST","url":"https://api.example.com/events","body":{"title":"{{input.issue.title}}"}}`
+- GitHub API:
+  `{"action":"create_issue_comment","body":"Classified as {{nodes.classifier.category}}"}`
+- Database Query:
+  `{"query":"SELECT id, status FROM jobs WHERE status = :status","parameters":{"status":"queued"}}`
+
+For switch routes and conditional branches, connect outgoing edges using the
+matching source handles. Never put API keys or passwords in workflow node
+configuration; GitHub and database credentials belong in the encrypted
+integration forms.
+
 GitHub webhooks at `/api/v1/webhooks/github` dispatch issue-open/reopen and
 pull-request-open/reopen events to matching connected-repository workflows.
 Generic webhook workflows use `/api/v1/webhooks/workflows/{workflow_id}` and
 the `X-AgentOS-Signature-256` HMAC header, signed with
-`GITHUB_WEBHOOK_SECRET`. Scheduled trigger configuration requires
-`interval_seconds` between 60 and 86400.
+`GITHUB_WEBHOOK_SECRET`. Scheduled trigger configuration uses UTC intervals
+and requires `interval_seconds` between 60 and 86400.
 
 Execution checkpoints and node logs are stored in PostgreSQL. Celery retries
 transient errors up to three times; Beat requeues lost queued work and stale
