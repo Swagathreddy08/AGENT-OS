@@ -98,7 +98,7 @@ async def test_executor_resumes_from_checkpoint_without_rerunning_completed_node
         nodes=[
             WorkflowNode(id="trigger", type="manual_trigger"),
             WorkflowNode(id="first", type="http_request"),
-            WorkflowNode(id="second", type="http_request"),
+            WorkflowNode(id="second", type="http_request", data={"name": "second"}),
         ],
         edges=[
             WorkflowEdge(id="edge1", source="trigger", target="first"),

@@ -22,12 +22,14 @@ class WorkflowExecutor:
         graph: WorkflowGraph,
         handlers: dict[str, Any] | None = None,
         should_continue: Any | None = None,
+        on_node_start: Any | None = None,
         on_node_complete: Any | None = None,
         on_node_error: Any | None = None,
     ):
         self.graph = graph
         self.handlers = handlers or {}
         self.should_continue = should_continue
+        self.on_node_start = on_node_start
         self.on_node_complete = on_node_complete
         self.on_node_error = on_node_error
 
@@ -59,6 +61,10 @@ class WorkflowExecutor:
                 if node_id in node_state:
                     output = node_state[node_id]
                 else:
+                    if self.on_node_start is not None:
+                        result = self.on_node_start(node_id, state)
+                        if inspect.isawaitable(result):
+                            await result
                     try:
                         output = await self._run_node(node_by_id[node_id], state)
                     except ApprovalRequired:
