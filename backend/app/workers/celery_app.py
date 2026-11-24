@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from celery import Celery
 
 from app.core.config import settings
@@ -5,6 +7,7 @@ from app.core.config import settings
 
 celery_app = Celery("agentos", broker=settings.redis_url, backend=settings.redis_url)
 celery_app.conf.update(
+    broker_connection_retry_on_startup=True,
     task_track_started=True,
     task_serializer="json",
     result_serializer="json",
@@ -15,5 +18,11 @@ celery_app.conf.update(
     task_time_limit=900,
     task_soft_time_limit=840,
     timezone="UTC",
+    beat_schedule={
+        "requeue-stuck-executions": {
+            "task": "app.workers.tasks.workflow_tasks.requeue_stuck_executions",
+            "schedule": timedelta(seconds=60),
+        },
+    },
 )
 celery_app.conf.imports = ("app.workers.tasks.workflow_tasks",)

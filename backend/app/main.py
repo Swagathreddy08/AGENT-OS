@@ -9,6 +9,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 from sqlalchemy import text
+from redis.asyncio import Redis
 
 from app.api.v1.router import router
 from app.core.config import settings
@@ -61,10 +62,14 @@ async def health() -> dict:
 
 @app.get("/health/ready")
 async def readiness() -> JSONResponse:
+    redis = Redis.from_url(settings.redis_url)
     try:
         async with SessionLocal() as db:
             await db.execute(text("SELECT 1"))
+        await redis.ping()
         return JSONResponse({"status": "ready"})
     except Exception as exc:
         logger.exception("Readiness check failed: %s", exc)
         return JSONResponse({"status": "not_ready"}, status_code=503)
+    finally:
+        await redis.aclose()

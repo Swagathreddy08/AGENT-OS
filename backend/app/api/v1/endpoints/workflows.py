@@ -1,4 +1,5 @@
 import hashlib
+import logging
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -14,6 +15,7 @@ from app.workflow_engine.validator import validate_graph
 
 
 router = APIRouter(prefix="/workflows", tags=["workflows"])
+logger = logging.getLogger(__name__)
 
 
 def _workflow_response(workflow: Workflow) -> dict:
@@ -212,8 +214,6 @@ async def execute_workflow(
         from app.workers.tasks.workflow_tasks import execute_workflow_task
         execute_workflow_task.delay(str(execution.id), graph.model_dump(mode="json"), payload.input)
     except Exception as exc:
-        execution.status = ExecutionStatus.FAILED
-        execution.error = "Unable to enqueue workflow execution."
-        await db.commit()
+        logger.exception("Unable to enqueue workflow execution %s", execution.id)
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Workflow queue is unavailable") from exc
     return _execution_response(execution)

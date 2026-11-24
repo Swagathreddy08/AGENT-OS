@@ -1,10 +1,14 @@
 import asyncio
-from datetime import datetime
+import logging
+from datetime import datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import select, update
 
 from app.workers.celery_app import celery_app
+
+
+logger = logging.getLogger(__name__)
 
 
 def utcnow() -> datetime:
@@ -69,26 +73,8 @@ async def _execute(
                 category = "bug" if any(word in source_text for word in ("bug", "error", "crash")) else "general"
                 return {"category": category, "condition": category == "bug"}
 
-            async def passthrough_handler(state: dict, config: dict) -> dict:
-                return {"status": "completed", "config": config}
-
-            async def approval_handler(state: dict, config: dict) -> dict:
-                return {"status": "waiting_approval", "config": config}
-
             handlers = {
                 "text_classifier": classifier_handler,
-                "if_else": passthrough_handler,
-                "approval": approval_handler,
-                "human_approval": approval_handler,
-                "ai_agent": passthrough_handler,
-                "llm_completion": passthrough_handler,
-                "summarizer": passthrough_handler,
-                "switch": passthrough_handler,
-                "merge": passthrough_handler,
-                "loop": passthrough_handler,
-                "github_api": passthrough_handler,
-                "http_request": passthrough_handler,
-                "database_query": passthrough_handler,
             }
 
             state = await WorkflowExecutor(
@@ -116,3 +102,47 @@ async def _execute(
 @celery_app.task(bind=True, autoretry_for=(Exception,), retry_backoff=True, max_retries=3)
 def execute_workflow_task(self, execution_id: str, graph: dict, input_data: dict) -> dict:
     return asyncio.run(_execute(execution_id, graph, input_data, self.request.retries))
+
+
+async def _requeue_stuck_executions() -> int:
+    from app.core.database import SessionLocal
+    from app.models.entities import ExecutionStatus, WorkflowExecution, WorkflowVersion
+
+    cutoff = utcnow() - timedelta(seconds=60)
+    async with SessionLocal() as db:
+        rows = (
+            await db.execute(
+                select(WorkflowExecution, WorkflowVersion)
+                .join(
+                    WorkflowVersion,
+                    (WorkflowVersion.workflow_id == WorkflowExecution.workflow_id)
+                    & (WorkflowVersion.version == WorkflowExecution.workflow_version),
+                )
+                .where(
+                    WorkflowExecution.status == ExecutionStatus.QUEUED,
+                    WorkflowExecution.created_at <= cutoff,
+                )
+                .order_by(WorkflowExecution.created_at)
+                .limit(100)
+            )
+        ).all()
+
+    for execution, version in rows:
+        try:
+            execute_workflow_task.delay(
+                str(execution.id),
+                version.graph,
+                execution.input,
+            )
+        except Exception:
+            logger.exception(
+                "Unable to requeue workflow execution %s",
+                execution.id,
+            )
+            raise
+    return len(rows)
+
+
+@celery_app.task(name="app.workers.tasks.workflow_tasks.requeue_stuck_executions")
+def requeue_stuck_executions() -> int:
+    return asyncio.run(_requeue_stuck_executions())
